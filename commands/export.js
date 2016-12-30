@@ -157,6 +157,36 @@ function getPortal() {
     return inquirePortal(bbrest, jxon);
 }
 
+function chunkExport(savePath, id){
+    jxon.config({parseValues: false});
+    return unzip(savePath, cfg.save).then(function() {
+        var exDir = path.parse(id).name;
+        var exPath = path.resolve(cfg.save, exDir);
+        var xmlPath = path.resolve(exPath, 'portalserver.xml');
+        return fs.readFileAsync(xmlPath)
+        .then(function(x) {
+            return handlePortalXml(x.toString(), path.resolve(cfg.save, 'metadata.xml'))
+            .then(function(contentRepoId) {
+                var content = (cfg.type === 'portal') ? 'contentservices.zip' : 'resource.zip';
+                var moves = [
+                    fs.moveAsync(path.resolve(exPath, content), path.resolve(cfg.save, content))
+                ];
+                if (contentRepoId) {
+                    var repoZip = contentRepoId + '.zip';
+                    moves.push(fs.moveAsync(path.resolve(exPath, repoZip), path.resolve(cfg.save, repoZip)));
+                }
+                return Q.all(moves)
+                .finally(function() {
+                    return fs.removeAsync(exPath);
+                })
+                .catch(function() {
+                    console.log('Error');
+                });
+            });
+        });
+    });
+}
+
 function runOrchestratorExport(jx) {
     var toPost = cfg.file || jx;
 
@@ -170,34 +200,11 @@ function runOrchestratorExport(jx) {
         return bbrest.export(id).file(savePath).get()
         .then(function(r) {
             if (cfg.chunk) {
-                return unzip(savePath, cfg.save)
-                .then(function() {
-                    var exDir = path.parse(id).name;
-                    var exPath = path.resolve(cfg.save, exDir);
-                    var xmlPath = path.resolve(exPath, 'portalserver.xml');
-                    return fs.readFileAsync(xmlPath)
-                    .then(function(x) {
-                        return handlePortalXml(x.toString(), path.resolve(cfg.save, 'metadata.xml'))
-                        .then(function(contentRepoId) {
-                            var content = (cfg.type === 'portal') ? 'contentservices.zip' : 'resource.zip';
-                            var moves = [
-                                fs.moveAsync(path.resolve(exPath, content), path.resolve(cfg.save, content))
-                            ];
-                            if (contentRepoId) {
-                                var repoZip = contentRepoId + '.zip';
-                                moves.push(fs.moveAsync(path.resolve(exPath, repoZip), path.resolve(cfg.save, repoZip)));
-                            }
-                            return Q.all(moves)
-                            .finally(function() {
-                                return fs.removeAsync(exPath)
-                                .then(ok);
-                            })
-                            .catch(function() {
+                return chunkExport(savePath, id)
+                    .then(ok)
+                    .catch(function() {
 
-                            });
-                        });
                     });
-                });
             } else {
                 return ok(r);
             }
@@ -216,8 +223,9 @@ function ok(r) {
     return r;
 }
 
-function handlePortalXml(x, metaFile) {
-    var jx = sort(x);
+function handlePortalXml(xml, metaFile) {
+    var jx = sort(typeof xml === 'string' ? jxon.stringToJs(xml) : xml);
+
     if (cfg.chunk) {
         var props = _.get(jx, 'exportBundle.portalContentRepositories.contentRepository.properties.property');
         var id = props ? _.find(props, {$name: 'repositoryId'}).value._ : '';
@@ -227,8 +235,8 @@ function handlePortalXml(x, metaFile) {
             return id;
         });
     } else {
-        if (cfg.pretty) x = formattor(jxon.jsToString(jx), {method: 'xml'});
-        return fs.writeFileAsync(cfg.save, x);
+        if (cfg.pretty) xml = formattor(jxon.jsToString(jx), {method: 'xml'});
+        return fs.writeFileAsync(cfg.save, xml);
     }
 }
 
